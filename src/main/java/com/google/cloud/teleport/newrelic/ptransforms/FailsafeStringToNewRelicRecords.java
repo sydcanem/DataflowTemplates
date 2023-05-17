@@ -41,6 +41,7 @@ public class FailsafeStringToNewRelicRecords
 
   private static final Logger LOG = LoggerFactory.getLogger(FailsafeStringToNewRelicRecords.class);
   private static final String TIMESTAMP_KEY = "timestamp";
+  private static final String JSONPAYLOAD_KEY = "jsonPayload";
   private static final Counter CONVERSION_ERRORS =
       Metrics.counter(FailsafeStringToNewRelicRecords.class, "newrelic-event-conversion-errors");
   private static final Counter CONVERSION_SUCCESS =
@@ -86,10 +87,11 @@ public class FailsafeStringToNewRelicRecords
 
                     try {
                       final Long timestamp = extractTimestampEpochMillisFromJson(input);
+                      final String transformedInput = unnestJsonPayload(input);
 
                       outputReceivers
                           .get(successfulConversionsTag)
-                          .output(new NewRelicLogRecord(input, timestamp));
+                          .output(new NewRelicLogRecord(transformedInput, timestamp));
                       CONVERSION_SUCCESS.inc();
                     } catch (Exception e) {
                       CONVERSION_ERRORS.inc();
@@ -142,5 +144,36 @@ public class FailsafeStringToNewRelicRecords
       // simply log text entries to NewRelic and this is expected behavior.
     }
     return null;
+  }
+
+  /**
+   * Simple method to un-nest `jsonPayload` from GCP logs and move attributes to top level object
+   *
+   * @param input Potentially JSON-formatted string. If the String is not JSON-formatted, this
+   *     method returns null
+   * @return Formatted payload
+   */
+  private static String unnestJsonPayload(final String input) {
+    try {
+      final JSONObject json = new JSONObject(input);
+      final JSONObject jsonPayload = json.getJSONObject(JSONPAYLOAD_KEY);
+
+      if (!jsonPayload.isEmpty()) {
+        for (String keyStr : jsonPayload.keySet()) {
+          json.put(keyStr, jsonPayload.optString(keyStr));
+        }
+        json.remove(JSONPAYLOAD_KEY);
+      }
+      return json.toString();
+    } catch (JSONException je) {
+      // input is either not a properly formatted JSONObject or has other exceptions. In this case,
+      // we will
+      // simply capture the entire input as a log record and not worry about capturing any specific
+      // properties
+      // (for e.g Timestamp etc). We also do not want to LOG this as we might be running a pipeline
+      // to
+      // simply log text entries to NewRelic and this is expected behavior.
+    }
+    return input;
   }
 }
